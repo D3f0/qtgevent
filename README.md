@@ -1,7 +1,7 @@
 qtgevent
 ========
 
-PyQt backend for gevent
+PyQt backend for gevent for python2/3 and PyQt4/PyQt5.
 
 
 Using it
