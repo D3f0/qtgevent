@@ -6,7 +6,12 @@ import atexit
 import functools
 import os
 import traceback
-from PyQt4 import QtCore, Qt
+# Will prefer Qt5 over Qt4
+try:
+    from PyQt5 import QtCore, Qt
+except ImportError:
+    from PyQt4 import QtCore, Qt
+
 import socket
 import signal
 import sys
@@ -15,11 +20,13 @@ import gevent
 QtCore.pyqtRemoveInputHook()
 
 _signal_rfd, _signal_wfd = socket.socketpair()
-_signal_rfd.setblocking(False); _signal_wfd.setblocking(False)
+_signal_rfd.setblocking(False)
+_signal_wfd.setblocking(False)
 atexit.register(_signal_rfd.close)
 atexit.register(_signal_wfd.close)
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 signal.set_wakeup_fd(_signal_wfd.fileno())
+
 
 class QtLoop(object):
     MINPRI = -2
@@ -31,10 +38,14 @@ class QtLoop(object):
         self._loop.default = default
         self.__callback_timers = {}
         self._signal_watchers = {}
-        self._raised_signal = None 
+        self._raised_signal = None
         self._child_watchers = {}
         self._loop.excepthook = functools.partial(self.handle_error, None)
-        self._signal_notifier = QtCore.QSocketNotifier(_signal_rfd.fileno(), QtCore.QSocketNotifier.Read, self._loop)
+        self._signal_notifier = QtCore.QSocketNotifier(
+            _signal_rfd.fileno(),
+            QtCore.QSocketNotifier.Read,
+            self._loop
+        )
         self._signal_notifier.activated.connect(self._handle_signal_in_loop)
         self._signal_notifier.setEnabled(True)
         self._watchers = set()
@@ -48,12 +59,18 @@ class QtLoop(object):
         self._loop = None
 
     def _handle_syserr(self, message, errno):
-        self.handle_error(None, SystemError, SystemError(message + ': ' + os.strerror(errno)), None)
+        self.handle_error(
+            None,
+            SystemError,
+            SystemError(message + ': ' + os.strerror(errno)),
+            None
+        )
 
     def handle_error(self, context, type, value, tb):
         error_handler = self.error_handler
         if error_handler is not None:
-            # we do want to do getattr every time so that setting Hub.handle_error property just works
+            # we do want to do getattr every time so that setting Hub.handle_error
+            # property just works
             handle_error = getattr(error_handler, 'handle_error', error_handler)
             handle_error(context, type, value, tb)
         else:
@@ -70,20 +87,20 @@ class QtLoop(object):
         if watchers:
             for watcher in watchers.copy():
                 watcher._run_callback()
-        
+
     def _handle_signal(self, signum, stack_frame):
-        self._raised_signal = signum 
+        self._raised_signal = signum
 
     def run(self, nowait=False, once=False):
-        flags = QtCore.QEventLoop.AllEvents #QtCore.QEventLoop.ExcludeUserInputEvents
+        flags = QtCore.QEventLoop.AllEvents  # QtCore.QEventLoop.ExcludeUserInputEvents
         if nowait or once:
-          if nowait:  #getattr(self._loop, "hasPendingEvents", lambda: False)():
-              return
-          self._loop.processEvents(flags)
-        else: 
-          self._loop.exec_(flags)
-          gevent.get_hub().throw()
-          
+            if nowait:  # getattr(self._loop, "hasPendingEvents", lambda: False)():
+                return
+            self._loop.processEvents(flags)
+        else:
+            self._loop.exec_(flags)
+            gevent.get_hub().throw()
+
     def reinit(self):
         pass
 
@@ -99,7 +116,7 @@ class QtLoop(object):
     def verify(self):
         pass
 
-    def now(self): 
+    def now(self):
         raise NotImplementedError
 
     def update(self):
@@ -189,7 +206,7 @@ class QtLoop(object):
             cb.callback(*cb.args)
         finally:
             self.__callback_timers[timer_id].deleteLater()
-            del self.__callback_timers[timer_id] 
+            del self.__callback_timers[timer_id]
             cb.stop()
 
     def run_callback(self, func, *args):
@@ -197,7 +214,9 @@ class QtLoop(object):
         callback_timer = QtCore.QTimer()
         callback_timer.setSingleShot(True)
         self.__callback_timers[id(callback_timer)]=callback_timer
-        callback_timer.timeout.connect(functools.partial(self._execute_callback, cb, id(callback_timer))) 
+        callback_timer.timeout.connect(
+            functools.partial(self._execute_callback, cb, id(callback_timer))
+        )
         callback_timer.start(0)
         return cb
 
@@ -250,9 +269,11 @@ class Callback(object):
         return result + ">"
 
     # Note, that __nonzero__ and pending are different
-    # nonzero is used in contexts where we need to know whether to schedule another callback,
+    # nonzero is used in contexts where we need to know whether to schedule
+    # another callback,
     # so it's true if it's pending or currently running
-    # 'pending' has the same meaning as libev watchers: it is cleared before entering callback
+    # 'pending' has the same meaning as libev watchers: it is cleared before entering
+    # callback
     def __nonzero__(self):
         # it's nonzero if it's pending or currently executing
         return self.args is not None
@@ -279,6 +300,7 @@ class Watcher(object):
 
     def _get_ref(self):
         return self._ref
+
     def _set_ref(self, value):
         self._ref = value
         if self._handle:
@@ -294,7 +316,7 @@ class Watcher(object):
     def stop(self):
         self.loop._watchers.discard(self)
         if self._handle is not None:
-          self._handle.deleteLater()
+            self._handle.deleteLater()
         self._callback = None
 
     def feed(self, revents, callback, *args):
@@ -347,8 +369,8 @@ class Timer(Watcher):
 
     @property
     def active(self):
-        if (self._handle == None):
-          return False
+        if self._handle is None:
+            return False
         return self._handle.isActive()
 
     def start(self, callback, *args, **kw):
@@ -368,15 +390,15 @@ class Timer(Watcher):
     def _run_callback(self, *args, **kwargs):
         super(Timer, self)._run_callback(*args, **kwargs)
         if self._should_repeat:
-          self._handle.stop()
-          self._handle.setSingleShot(False)
-          self._handle.setInterval(self._repeat * 1000)
-          self._should_repeat = False
-          self._handle.start()
+            self._handle.stop()
+            self._handle.setSingleShot(False)
+            self._handle.setInterval(self._repeat * 1000)
+            self._should_repeat = False
+            self._handle.start()
 
     def stop(self):
-        if (self._handle != None):
-          self._handle.stop()
+        if self._handle is not None:
+            self._handle.stop()
         super(Timer, self).stop()
 
     def again(self, callback, *args, **kw):
@@ -399,7 +421,7 @@ class Idle(Watcher):
         self._handle = QtCore.QTimer(self.loop._loop)
         self._handle.timeout.connect(self._idle_cb)
         self._handle.setInterval(0)
-        self._handle.start() 
+        self._handle.start()
 
     def stop(self):
         self._handle.stop()
@@ -454,14 +476,15 @@ class Io(Watcher):
 
     def _get_events(self):
         return self._events
+
     def _set_events(self, value):
         self._events = self._ev2qt(value)
         already_started = self._handle.isEnabled()
         self._handle = QtCore.QSocketNotifier(self._fd, self._events, self.loop._loop)
         self._handle.setEnabled(False)
         if already_started:
-          self._handle.activated.connect(self._poll_cb)
-          self._handle.setEnabled(True) 
+            self._handle.activated.connect(self._poll_cb)
+            self._handle.setEnabled(True)
     events = property(_get_events, _set_events)
     del _get_events, _set_events
 
@@ -505,7 +528,7 @@ class Async(Watcher):
 
 class Child(Watcher):
     def __init__(self, loop, pid, ref=True):
-        #if not loop.default:
+        # if not loop.default:
         #    raise TypeError("child watchers are only allowed in the default loop")
         super(Child, self).__init__(loop, ref)
         loop.install_sigchld()
@@ -567,4 +590,3 @@ class Signal(Watcher):
         self._active = False
         super(Signal, self).stop()
         self.loop._signal_watchers[self._signum].discard(self)
-

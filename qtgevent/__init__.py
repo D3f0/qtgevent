@@ -1,7 +1,7 @@
 # coding=utf8
 
 __all__ = ['install']
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 
 # Patchers
@@ -14,4 +14,3 @@ def patch_loop():
 
 def install():
     patch_loop()
-
